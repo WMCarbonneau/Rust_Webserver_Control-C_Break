@@ -1,0 +1,59 @@
+use std::io::prelude::*;
+use std::net::TcpListener;
+use std::net::TcpStream;
+use std::fs;
+use web_server_1::ThreadPool;
+use ctrlc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
+
+fn main() {
+    let listener = TcpListener::bind("127.0.0.1:7878").unwrap();
+    let pool = ThreadPool::new(2);
+  // handle interrupt currently onlly quits upon next request. The next request is needed to find the next iteration in the loop and run the if block.
+    let running = Arc::new(AtomicBool::new(false));
+    let r = running.clone();
+
+    ctrlc::set_handler(move || {
+        r.store(true, Ordering::SeqCst);
+    }).expect("Error setting Ctrl-C handler");
+
+    for stream in listener.incoming() {
+        println!("{}", running.load(Ordering::SeqCst));
+        if running.load(Ordering::SeqCst) {return} // interrupt handler end
+        let stream = stream.unwrap();
+
+        pool.execute(|| {
+            handle_connection(stream);
+        });
+}
+    println!("Shutting down.");
+}
+
+fn handle_connection(mut stream: TcpStream) {
+    let mut buffer = [0; 1024];
+
+    stream.read(&mut buffer).unwrap();
+
+    let get = b"GET / HTTP/1.1\r\n";
+
+    let (status_line, filename) = if buffer.starts_with(get) {
+        ("HTTP/1.1 200 OK", "hello.html")
+    } else {
+        ("HTTP/1.1 404 NOT FOUND", "404.html")
+    };
+
+    let contents = fs::read_to_string(filename).unwrap();
+
+    let response = format!(
+        "{}\r\nContent-Length: {}\r\n\r\n{}",
+        status_line,
+        contents.len(),
+        contents
+    );
+
+    stream.write(response.as_bytes()).unwrap();
+    stream.flush().unwrap();
+}
+
